@@ -1,0 +1,328 @@
+---
+title: "Thesis Data Analysis"
+author: "Lauren Deitz"
+date: '2023-05-10'
+output: pdf_document
+always_allow_html: true
+---
+
+# Maternal Mortality and Abortion Access
+
+
+## Data Wrangling Steps
+This document does not have the data wrangling steps I took, which were in both R and Jupyter notebook:
+
+#### Distances
+- The dataset goes back to 2009 and is maintained through today. I restricted to 2010-2020 to keep in line with the population data I have.
+- Rolled up to state and year level (rather than county and month) by taking the average distance by state by year.
+
+#### Small Area Health Insurance Estimates
+- This data was pulled using the `censusapi` R package and joined with the population/race data below.
+
+#### Population/race
+- This data was pulled using the `tidycensus` R package and joined with SAHIE data above.
+
+#### Mortality rate
+- I downloaded the mortality datasets by state by year. There are a few states that have suppressed data where fewer than 10 people died of maternal reasons within a year. I filled those suppressed values with 0.
+- I downloaded natality (live births) by state by year. This did not result in any suppressed data.
+- I used the WHO definition of maternal mortality rate (deaths over 100,000 live births) and calculated using the formula (maternal deaths / live births) * 100,000
+
+#### Overall dataset
+- The dataset was joined together in Jupyter notebook.
+
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(plm)
+library(ggplot2)
+library(ggthemes)
+library(lubridate)
+library(networkD3)
+library(lmtest)
+library(usmap)
+library(tidyr)
+library(jtools)
+library(stargazer)
+```
+
+
+5-way and 3-way score time trend graphs
+
+```{r message=FALSE, warning=FALSE}
+dataset <- read.csv("~/Courses/Thesis/thesis_dataset_draft2.csv")
+
+trim_dataset <- dataset %>% 
+  mutate(yr = as.Date(ISOdate(YEAR, 1, 1)), yr = format(yr, '%Y'))
+
+# 5-way
+grp_data <- trim_dataset %>% 
+  group_by(score5way,yr) %>% 
+  dplyr::summarise(mn = mean(maternal_mortality_rate))
+
+grp_data$score5way <- factor(grp_data$score5way, 
+                             levels=c("Hostile","Restricted","Neutral",
+                                      "Supportive","Protective"))
+
+grp_data %>% ggplot(., aes(x=yr,y=mn, color=score5way, group=score5way)) + geom_line() +
+  scale_color_manual(values=c("#FF0000","#FF6666","#999999","#33FF99","#009966"), 
+                     name="Policy Scores") + theme_clean() + 
+  ggtitle("Maternal mortality rate by abortion policy, 5-way score") +
+  xlab("Year") + ylab("Maternal mortality rate")
+```
+
+```{r message=FALSE, warning=FALSE}
+# 3-way
+
+grp_data3 <- trim_dataset %>% 
+  group_by(score3way,yr) %>% 
+  dplyr::summarise(mn = mean(maternal_mortality_rate))
+
+grp_data3$score3way <- factor(grp_data3$score3way, 
+                              levels=c("Hostile","Neutral","Protective"))
+
+grp_data3 %>% ggplot(., aes(x=yr,y=mn, color=score3way, group=score3way)) + geom_line() +
+  scale_color_manual(values=c("#FF0000","#999999","#009966"), name="Policy Scores") + 
+  theme_clean() + ggtitle("Maternal mortality rate by abortion policy, 3-way score") +
+  xlab("Year") + ylab("Maternal mortality rate")
+```
+
+
+Sankey visualization
+
+```{r message=FALSE, warning=FALSE}
+
+#sankey
+nodes <- read.csv("~/Courses/Thesis/img/sankey2nodes.csv", fileEncoding="UTF-8-BOM")
+links <- read.csv("~/Courses/Thesis/img/sankey2links.csv", fileEncoding="UTF-8-BOM")
+
+links <- links %>% mutate(source = source-1, target=target-1)
+
+library(htmlwidgets)
+
+nodes$group <- as.factor(c("a","b","c","d","e","a","b","c","d","e","a","b","c","d","e"))
+
+links <- links %>% mutate(group = case_when(
+  target == 5 ~ "h",
+  target == 6 ~ "r", 
+  target == 7 ~ "n", 
+  target == 8 ~ "s", 
+  target == 9 ~ "p",
+  target == 10 ~ "h",
+  target == 11 ~ "r",
+  target == 12 ~ "n",
+  target == 13 ~ "s",
+  target == 14 ~ "p"
+))
+
+my_color <- 'd3.scaleOrdinal() .domain(["a","b","c","d","e", "h", "r", "n", 
+"s", "p"]) .range(["#b53226", "#e89d74", "#b3abae", "#ba9bde", "#754ba6","#b53226", 
+"#e89d74", "#b3abae", "#ba9bde", "#754ba6"])'
+
+sk <- sankeyNetwork(Links = links, Nodes = nodes, Source = "source", Target = "target", 
+                    Value = "value", NodeID = "name", units = "State", fontSize=15, 
+                    nodeWidth = 30, colourScale=my_color, NodeGroup="group", 
+                    LinkGroup="group")
+
+sk
+
+```
+
+Summary stats
+
+```{r message=FALSE, warning=FALSE}
+
+dataset <- dataset %>% 
+  dplyr::rename("black_non_hispanic" = "pp",
+                "distance_to_clinic" = "distance_origintodest")
+
+vars <- c("distance_to_clinic", "insurance_rate", "black_non_hispanic", 
+          "maternal_mortality_rate", "ScoreNum") 
+
+colnames(dataset)
+
+d.vars <- dataset %>% 
+  dplyr::select(vars) %>% 
+  dplyr::select("Distance to Clinic" = distance_to_clinic, 
+                "Insurance rate" = insurance_rate, 
+                "% Black non-Hispanic" = black_non_hispanic, 
+                "Maternal mortality rate" = maternal_mortality_rate, 
+                "Policy Score" = ScoreNum)
+
+stargazer(d.vars, type="text")
+
+```
+
+Histograms
+
+```{r message=FALSE, warning=FALSE}
+firstD <- function(var, group, df){
+  bad <- (missing(group) & !missing(df))
+  if (bad) stop("if df is specified then group must also be specified")
+  
+  fD <- function(j){ c(NA, diff(j)) }
+  
+  var.is.alone <- missing(group) & missing(df)
+  
+  if (var.is.alone) {
+    return(fD(var))
+  }
+  if (missing(df)){
+    V <- var
+    G <- group
+  }
+  else{
+    V <- df[, deparse(substitute(var))]
+    G <- df[, deparse(substitute(group))]
+  }
+  
+  G <- list(G)
+  D.var <- by(V, G, fD)
+  unlist(D.var)
+}
+
+dataset.fdiff <- firstD(ScoreNum, origin_state, dataset)
+
+dataset.fdiff.na <- dataset.fdiff[!is.na(dataset.fdiff)]
+
+mean(dataset.fdiff.na)
+
+hist(dataset.fdiff, main="State policy changes, n = 550", 
+     ylim=c(0,450), xlab="Policy score changes by year, n = 550", 
+     labels=TRUE, breaks=-3:3)
+
+dataset.decade <- dataset %>% filter(YEAR == 2010 | YEAR == 2020)
+
+dataset.decade.score.fdiff <- firstD(ScoreNum, origin_state, dataset.decade)
+
+dataset.decade.score.fdiff.na <- 
+  dataset.decade.score.fdiff[!is.na(dataset.decade.score.fdiff)]
+
+mean(dataset.decade.score.fdiff.na)
+
+hist(dataset.decade.score.fdiff.na, 
+     main="Policy score changes between 2010-2020, n = 550", ylim=c(0,18), 
+     xlab="Insurance rate change", labels=TRUE)
+
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+dataset.fdiff.insur <- firstD(insurance_rate, origin_state, dataset)
+
+dataset.fdiff.insur.na <- dataset.fdiff.insur[!is.na(dataset.fdiff.insur)]
+
+mean(dataset.fdiff.insur.na)
+
+hist(dataset.fdiff.insur, main="Insurance rate changes by year, n = 550", 
+     ylim=c(0,225), xlab="Insurance rate change", labels=TRUE)
+
+dataset.decade <- dataset %>% filter(YEAR == 2010 | YEAR == 2020)
+
+dataset.decade.fdiff <- firstD(insurance_rate, origin_state, dataset.decade)
+
+datasef.decade.fdiff.na <- dataset.decade.fdiff[!is.na(dataset.decade.fdiff)]
+
+mean(datasef.decade.fdiff.na)
+
+
+hist(dataset.decade.fdiff, main="Insurance rate changes between 2010-2020, n = 550", 
+     ylim=c(0,18), xlab="Insurance rate change", labels=TRUE)
+
+```
+
+```{r message=FALSE, warning=FALSE}
+dataset.fdiff.pp <- firstD(black_non_hispanic, origin_state, dataset)
+
+dataset.fdiff.pp.na <- dataset.fdiff.pp[!is.na(dataset.fdiff.pp)]
+
+mean(dataset.fdiff.pp.na)
+
+hist(dataset.fdiff.pp.na, main="Black Non-Hispanic changes by year, n = 550", 
+     ylim=c(0,259), xlab="% Black Non-Hispanic change", labels=TRUE)
+
+dataset.decade.pp <- dataset %>% filter(YEAR == 2010 | YEAR == 2020)
+
+dataset.decade.pp.fdiff <- firstD(black_non_hispanic, origin_state, dataset.decade.pp)
+
+dataset.decade.pp.fdiff.na <- dataset.decade.pp.fdiff[!is.na(dataset.decade.pp.fdiff)]
+
+mean(dataset.decade.pp.fdiff.na)
+
+hist(dataset.decade.pp.fdiff, 
+     main="Black Non-Hispanic changes between 2010-2020, n = 550", ylim=c(0,30), 
+     xlab="% Black Non-Hispanic change", labels=TRUE)
+
+```
+
+Map visualization
+
+```{r fig.height=8, fig.width=12}
+#map
+mapdf <- stack(dataset.decade.score.fdiff.na)
+
+mapdf <- mapdf %>% mutate(state = substr(ind, 1, 2)) %>% dplyr::select(state, values)
+
+plot_usmap(data=mapdf, color="white") + 
+  scale_fill_gradient2(low="#b53226", mid="#b3abae", high="#754ba6",
+                       name="Policy Score Change 2010-2020") + 
+  labs("Policy Score Changes in the United States") +  theme(legend.position="right")
+```
+OLS models
+
+```{r message=FALSE, warning=FALSE}
+ols1 <- lm(maternal_mortality_rate ~ ScoreNum + insurance_rate + distance_to_clinic + 
+             as.factor(YEAR), dataset)
+
+## simple OLS ##
+summary(ols1)
+
+# clustered standard errors
+coeftest(ols1, cluster = origin_state)
+
+```
+
+Fixed effects models
+
+```{r message=FALSE, warning=FALSE}
+
+fx1 = plm(maternal_mortality_rate ~ ScoreNum + as.factor(YEAR),
+            index = c('origin_state','YEAR'),
+            model = 'within',
+            data = dataset)
+
+summary(fx1)
+
+fx2 = plm(maternal_mortality_rate ~ ScoreNum + insurance_rate + distance_to_clinic + 
+            as.factor(YEAR),
+            index = c('origin_state','YEAR'),
+            model = 'within',
+            data = dataset)
+
+summary(fx2)
+
+```
+
+```{r message=FALSE, warning=FALSE}
+
+jtools::export_summs(ols1, coeftest(ols1, cluster = origin_state), fx1, fx2, 
+                     model.names = c("OLS", "Clustered SE", "Fixed Effects 1", "Fixed Effects 2"), 
+                     coefs = c("Policy score" = "ScoreNum",
+                               "Distance to facility" = "distance_to_clinic",
+                               "State insurance rate" = "insurance_rate",
+                               "2011" = "as.factor(YEAR)2011",
+                               "2012" = "as.factor(YEAR)2012",
+                               "2013" = "as.factor(YEAR)2013",
+                               "2014" = "as.factor(YEAR)2014",
+                               "2015" = "as.factor(YEAR)2015",
+                               "2016" = "as.factor(YEAR)2016",
+                               "2017" = "as.factor(YEAR)2017",
+                               "2018" = "as.factor(YEAR)2018",
+                               "2019" = "as.factor(YEAR)2019",
+                               "2020" = "as.factor(YEAR)2020"
+                               ),
+                     to.file = "Word",
+                     file.name = "modelsummary.docx")
+
+```
