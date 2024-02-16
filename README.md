@@ -1,1 +1,7 @@
-# masters_thesis
+# QMSS Masters Thesis
+
+This repo contains code from completing my master's thesis in May 2023. For that project, I examined the associations between maternal mortality and abortion access in the United States between the years of 2010-2020. I used a linear fixed effects model in an attempt to show a positive association between the level of access to an elective abortion and the maternal mortality rate. This would have been demonstrated if states whose abortion policies changed to more restrictive had higher maternal mortality rates than those whose abortion policies did not change in this way. The independent variable was the state maternal mortality rate by year, and the dependent variable was the year-over-year level of hostility towards abortion within a state as calculated by the policy scorecard. 
+
+I used the CDC Wonder National Vital Statistics System dataset to extract deaths related to pregnancy, as coded with ICD-10 medical classification. I created my own year-over-year state policy scorecard grading state regulations as Hostile, Restrictive, Neutral, Supportive, or Protective based on state policy trackers at the Guttmacher Institute and the Center for Reproductive Rights. I also incorporated census data to account for disparities across race and health insurance coverage.
+
+The code to produce the analysis and visualizations for the paper is in the R markdown file in this repo. It is meant as a supplementary piece, and most of the context for the output is in the document.
